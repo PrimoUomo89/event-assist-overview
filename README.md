@@ -292,7 +292,8 @@ history.
 
 `admin-backend` exposes an internal CRUD API intended for operation behind a
 private network boundary. No JWT or API key is required — the security boundary
-is the network, not the application layer.
+is the network, not the application layer. Currently, this app is for local
+dev use only (not live).
 
 ### CORS
 
@@ -337,7 +338,8 @@ after considering the alternatives.
 
 `domains/` contains zero `import` statements referencing `packages/` or `apps/`.
 Domain services depend only on port interfaces (TypeScript abstractions), which
-infrastructure implementations satisfy. The benefit is testability and portability:
+infrastructure implementations satisfy. The goal was a clear set of core shared 
+contracts, enforced through pnpm build. The benefit is testability and portability:
 swapping Postgres for another store requires only a new `Pg*Repo`-shaped class.
 The cost is more indirection and more boilerplate at the DI boundary.
 
@@ -346,9 +348,12 @@ The cost is more indirection and more boilerplate at the DI boundary.
 Index definitions, rendering templates, and LLM context shapes are stored as JSONB
 on the `knowledge_bases` row rather than encoded in application code. This lets a
 single running deployment serve conferences with entirely different content
-structures without a redeploy. The trade-off is that schema validation shifts to
-runtime rather than compile time, and template errors surface during indexing
-rather than during the build.
+structures without a redeploy. It also keeps the system open to broader usage. 
+The trade-off is that schema validation shifts to runtime rather than compile time, 
+and template errors surface during indexing rather than during the build. However,
+errors at indexing time are significant warning, can be rectified by resubmitting
+a schema or document and reindexing just the document, and even if ignored, often
+will not create significant issues in the product outcomes.
 
 ### 3. Three LLM calls vs. a single agentic loop
 
@@ -358,7 +363,9 @@ single agent tool-use capabilities and letting it loop. The three-call structure
 produces deterministic execution paths, predictable latency budgets, and a clear
 audit trail (every step is a separate `agent_invocation` row with `parentInvocationId`
 linkage). The trade-off is less flexibility: complex multi-hop reasoning is not
-supported by this design.
+supported by this design. This is something that will likely be explored indefinitely
+as the product attempts to reconcile the priorities of low-latency and non-trivial
+responses.
 
 ### 4. pgvector + HNSW vs. a dedicated vector database
 
@@ -377,7 +384,10 @@ All document and key deletion is soft: rows are marked `deleted_at` rather than
 removed. This preserves audit history and — critically — keeps `search_result`
 rows referencing valid document IDs even after the document is logically deleted.
 The trade-off is that queries must always filter `WHERE deleted_at IS NULL`, and
-storage grows monotonically unless a separate archive job runs.
+storage grows monotonically unless a separate archive job runs. This is particularly
+important given the back and forth types of edits that occur in event programs, 
+as well as giving more history for enterprise systems trying to hone their
+integrations.
 
 ### 6. Per-deployment signing keys vs. a shared JWT secret
 
@@ -385,7 +395,8 @@ Each `AgentDeployment` has its own `SigningKey` set. Compromising one deployment
 key does not affect any other deployment. Key rotation is zero-downtime: old keys
 remain in `verify_only` state while new keys are issued. The trade-off is a more
 complex key lifecycle (active/verify_only/retired states) compared to rotating a
-single application secret.
+single application secret. The value is that enterprise systems can have clearer
+analytics, aggregating traffic by where the agent is deployed.
 
 ### 7. pg-boss vs. a separate queue service
 
@@ -394,4 +405,7 @@ pg-boss, which stores jobs in a dedicated Postgres schema on the same database
 instance. This keeps the operational posture to a single Postgres dependency —
 no Redis, no SQS, no separate queue service to provision, monitor, or back up.
 The trade-off is that the job queue shares the database's I/O budget and cannot
-be scaled independently from the primary store.
+be scaled independently from the primary store. The primary purpos of pg-boss
+at this point is small llm calls to verify documents during search. The
+consumption of resources will be negligible initially, but this may change
+with scaling.
